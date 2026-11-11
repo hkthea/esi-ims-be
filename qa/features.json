@@ -1,0 +1,151 @@
+{
+    "version": 1,
+    "updated": "2026-11-04",
+    "credentials": "Kredensial QA diberikan lewat secret agent (QA_USERNAME / QA_PASSWORD), bukan dari manifest ini. Agent login dulu ke POST /auth/login untuk mendapat JWT, lalu kirim sebagai header srawungtoken. Jangan pernah menulis password atau token ke issue.",
+    "notes": "Tiap fitur memetakan path sumber ke langkah uji. CI mencocokkan file yang berubah pada deploy staging dengan field `paths`, lalu menaruh fitur yang cocok ke issue QA. Tambahkan/ubah entri di sini setiap kali ada endpoint atau perilaku baru.",
+    "prerequisites": [
+        "Login dulu lewat POST /auth/login dengan akun QA dari secret agent ini (QA_USERNAME / QA_PASSWORD); token dipakai sebagai header `srawungtoken` untuk endpoint ber-token. Ini pintu masuk, bukan objek uji — tidak dihitung sebagai fitur.",
+        "Buka browser dengan console devtools aktif selama sesi uji untuk menangkap error JS.",
+        "Uji hanya di staging; jangan mengubah data produksi."
+    ],
+    "features": [
+        {
+            "id": "api-health",
+            "name": "Health & versi service",
+            "area": "infra",
+            "priority": "p1",
+            "regression": true,
+            "routes": ["GET /", "GET /version"],
+            "paths": ["src/index.ts", "src/router.ts", "src/library/version.ts", "version.json", "Dockerfile", ".dockerignore", "scripts"],
+            "steps": [
+                "curl GET <base-url>/ : harus HTTP 200 dengan `{ error: 0, data: <unix timestamp> }`.",
+                "curl GET <base-url>/version : harus mengembalikan array histori versi berisi `version` dan `description`."
+            ],
+            "expected": [
+                "Tidak ada 502/504 dan container tidak crash loop (cek `kubectl logs` pod staging).",
+                "Envelope konsisten `{ error, data, message }` di semua respons."
+            ]
+        },
+        {
+            "id": "auth-lifecycle",
+            "name": "Autentikasi & sesi JWT",
+            "area": "auth",
+            "priority": "p0",
+            "regression": false,
+            "routes": [
+                "POST /auth/login",
+                "GET /auth/me",
+                "GET /auth/logout",
+                "POST /auth/profile",
+                "POST /auth/changePassword"
+            ],
+            "paths": [
+                "src/controller/auth.ts",
+                "src/controller/utils.ts",
+                "src/library/signer.ts",
+                "src/library/base_signer.ts",
+                "src/model/users.ts",
+                "src/model/base_users.ts",
+                "src/schema/users.ts"
+            ],
+            "steps": [
+                "POST /auth/login dengan kredensial benar: `data` berisi token JWT.",
+                "POST /auth/login dengan password salah: `error` != 0 dan ada `message` yang jelas.",
+                "GET /auth/me dengan header `srawungtoken`: mengembalikan user yang sedang login.",
+                "GET /auth/me tanpa/token rusak: ditolak dengan `error` != 0 (bukan 500).",
+                "POST /auth/profile lalu POST /auth/changePassword: perubahan tersimpan dan login ulang dengan password baru berhasil.",
+                "GET /auth/logout: token lama tidak bisa dipakai lagi."
+            ],
+            "expected": [
+                "Token kedaluwarsa/ salah tidak menghasilkan stack trace di respons.",
+                "Password tidak pernah muncul di respons maupun log."
+            ]
+        },
+        {
+            "id": "user-seeder",
+            "name": "Seeder user default",
+            "area": "auth",
+            "priority": "p2",
+            "regression": false,
+            "hidden": true,
+            "hiddenReason": "Endpoint utilitas admin. Tidak pernah ditampilkan di issue QA; agent QA memakai akun dari secret (QA_USERNAME/QA_PASSWORD). Path-nya tetap dipetakan supaya tidak muncul di daftar 'belum ter-mapping'.",
+            "routes": ["GET /seeder/user/:pass"],
+            "paths": ["src/controller/seeder.ts", "src/seeder/user.ts"],
+            "steps": [
+                "Bootstrap manual oleh maintainer, bukan agent QA: panggil endpoint seeder sekali di environment baru, lalu pastikan login dengan akun default berhasil.",
+                "Panggil endpoint yang sama dua kali: tidak membuat user ganda dan tidak error."
+            ],
+            "expected": ["Endpoint seeder aman dipanggil ulang (idempotent) dan hanya untuk environment internal."]
+        },
+        {
+            "id": "airlines-crud",
+            "name": "CRUD Airlines (paging, search, soft delete)",
+            "area": "resource",
+            "priority": "p0",
+            "regression": true,
+            "routes": [
+                "GET /api/v1/airlines",
+                "POST /api/v1/airlines",
+                "GET /api/v1/airlines/detail/:id",
+                "DELETE /api/v1/airlines/:id",
+                "GET /api/v1/airlines/cache"
+            ],
+            "paths": [
+                "src/controller/airline.ts",
+                "src/schema/airline.ts",
+                "src/model/utils.ts"
+            ],
+            "steps": [
+                "GET /api/v1/airlines?page=1&perPage=10 : `data` berisi list + metadata paging.",
+                "GET dengan `search2={\"name\":\"garuda\"}`: hanya baris yang cocok yang muncul.",
+                "POST tanpa `_id` dengan semua field wajib: data baru tersimpan dan muncul di list.",
+                "POST dengan `_id` yang sudah ada dan `name` diubah: data ter-update, tidak membuat duplikat.",
+                "GET /detail/:id: mengembalikan satu data yang benar.",
+                "DELETE /:id lalu GET list: data hilang dari list, dan GET /detail/:id untuk id itu tidak lagi mengembalikan data aktif.",
+                "GET /cache: list ringan tanpa paging dan hanya field yang dipakai dropdown."
+            ],
+            "expected": [
+                "Semua endpoint butuh header `srawungtoken`; tanpa token ditolak rapi.",
+                "Soft delete mengisi `deletedAt`, data tidak terhapus fisik.",
+                "Input tidak valid ditolak dengan `error` != 0, bukan 500."
+            ]
+        },
+        {
+            "id": "activity-log",
+            "name": "Activity log CRUD",
+            "area": "observability",
+            "priority": "p2",
+            "regression": false,
+            "routes": ["POST /api/v1/airlines", "DELETE /api/v1/airlines/:id"],
+            "paths": ["src/schema/activity_log.ts"],
+            "steps": [
+                "Lakukan satu create dan satu delete lewat API staging.",
+                "Periksa koleksi `activity_log` (atau log server): tiap aksi tercatat lengkap dengan user dan waktu."
+            ],
+            "expected": ["Tidak ada aksi CRUD yang lolos tanpa jejak di activity log."]
+        },
+        {
+            "id": "runtime-config",
+            "name": "Konfigurasi runtime & environment",
+            "area": "infra",
+            "priority": "p1",
+            "regression": false,
+            "routes": ["POST /auth/login"],
+            "paths": [
+                "src/library/config.ts",
+                "package.json",
+                "ecosystem.config.js",
+                ".env.example",
+                "templates"
+            ],
+            "steps": [
+                "Pastikan pod staging hidup dengan env dari secret `<deployment>-env` (bukan nilai template).",
+                "Coba login: kalau `DATABASE_CONNECTION` atau kunci JWT salah, error harus jelas di log, bukan timeout menggantung."
+            ],
+            "expected": [
+                "Tidak ada kredensial produksi yang dipakai di staging.",
+                "Service start tanpa peringatan konfigurasi yang fatal."
+            ]
+        }
+    ]
+}

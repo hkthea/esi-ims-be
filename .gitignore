@@ -1,0 +1,14 @@
+node_modules
+dist
+.vscode
+*.pem
+yarn.lock
+env.js
+.DS_Store
+menu
+download
+firebase_key
+.env
+params.json
+bun.lockb
+.eslintcache

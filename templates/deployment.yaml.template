@@ -1,0 +1,85 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ${DEPLOYMENT}
+  namespace: ${NAMESPACE}
+  labels:
+    app: ${DEPLOYMENT}
+  annotations:
+    app-version: "${VERSION}"
+spec:
+  replicas: ${INSTANCE}
+  selector:
+    matchLabels:
+      app: ${DEPLOYMENT}
+  template:
+    metadata:
+      labels:
+        app: ${DEPLOYMENT}
+    spec:
+      imagePullSecrets:
+        - name: registry-esi
+      containers:
+        - name: ${DEPLOYMENT}
+          image: ${IMAGE}
+          command: ["npm", "run", "${COMMAND}"]
+          resources:
+            limits:
+              memory: "512Mi"
+              cpu: "300m"
+            requests:
+              memory: "256Mi"
+              cpu: "200m"
+          envFrom:
+            - secretRef:
+                name: ${DEPLOYMENT}-env
+          ports:
+            - containerPort: 11611
+          env:
+            - name: NAME
+              value: ${DEPLOYMENT}
+            - name: PORT
+              value: "11611"
+            - name: IP
+              value: "0.0.0.0"
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ${DEPLOYMENT}-svc
+  namespace: ${NAMESPACE}
+spec:
+  selector:
+    app: ${DEPLOYMENT}
+  ports:
+    - port: 11611
+      targetPort: 11611
+  type: ClusterIP
+
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: ${DEPLOYMENT}-ingress
+  namespace: ${NAMESPACE}
+  labels:
+    name: ${DEPLOYMENT}-ingress
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+spec:
+  tls:
+    - hosts:
+        - template.com
+      secretName: template.com
+  rules:
+    - host: template.com
+      http:
+        paths:
+          - pathType: Prefix
+            path: /service
+            backend:
+              service:
+                name: ${DEPLOYMENT}-svc
+                port:
+                  number: 11611

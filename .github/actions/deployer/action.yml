@@ -1,0 +1,64 @@
+name: "Deploy to Kubernetes (bootstrap)"
+description: "Applies templates/deployment.yaml.template for the first deploy. Day-to-day deploys use kubectl set image in the workflow."
+inputs:
+  kubeconfig:
+    description: "Path to the kubeconfig file."
+    default: "~/.kube/config"
+    # utk deploy ke multi cluster, simpan kubeconfig di file server deploy, dan ganti ke tiap master cluster nya
+    required: false
+  namespace:
+    description: "Kubernetes namespace to deploy to."
+    required: true
+  deployment:
+    default: "template-backend"
+    description: "Kubernetes deployment (and container) name."
+    required: true
+  deployment-file:
+    default: "./templates/deployment.yaml.template"
+    description: "Deployment template file."
+    required: false
+  image:
+    description: "Docker image name without tag."
+    default: "registry.edifly-dev.com/esi-dev/template-be"
+    required: true
+  version:
+    description: "Image tag / app version."
+    default: "latest"
+    required: false
+  instance:
+    # jumlah replikasi
+    description: "Instance count."
+    default: "1"
+    required: false
+runs:
+  using: "composite"
+  steps:
+    - name: Get latest commit message
+      shell: bash
+      id: commit
+      run: |
+        COMMIT_MSG=$(git log -1 --pretty=%B | tr -d '\n' | cut -c1-240)
+        echo "COMMIT_MSG=$COMMIT_MSG" >> $GITHUB_ENV
+    - name: Make deployment.yaml
+      shell: bash
+      run: |
+        IMAGE="${{ inputs.image }}:${{ inputs.version }}"
+        echo "IMAGE=${IMAGE}"
+        sed -e "s|\${IMAGE}|${IMAGE}|g" \
+            -e "s|\${NAMESPACE}|${{ inputs.namespace }}|g" \
+            -e "s|\${DEPLOYMENT}|${{ inputs.deployment }}|g" \
+            -e "s|\${VERSION}|${{ inputs.version }}|g" \
+            -e "s|\${INSTANCE}|${{ inputs.instance }}|g" "${{ inputs.deployment-file }}" > deployment.yaml
+        cat deployment.yaml  # Display the file for verification
+    - name: Deploy to Kubernetes
+      shell: bash
+      run: |
+        KUBECTL="kubectl"
+        if [ -n "${{ inputs.kubeconfig }}" ]; then
+          KUBECTL="kubectl --kubeconfig ${{ inputs.kubeconfig }}"
+        fi
+        $KUBECTL apply -f deployment.yaml
+        $KUBECTL -n "${{ inputs.namespace }}" rollout status "deployment/${{ inputs.deployment }}" --timeout=180s
+        $KUBECTL -n "${{ inputs.namespace }}" annotate deployment "${{ inputs.deployment }}" \
+          git-commit-message="${{ env.COMMIT_MSG }}" \
+          --overwrite
